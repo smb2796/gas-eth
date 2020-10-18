@@ -1,63 +1,21 @@
 const {BigQuery} = require('@google-cloud/bigquery');
 const highland = require('highland');
-const parseArgs = require('minimist');
+const moment = require('moment');
+
+const minimist = require('minimist');
+
+let args = minimist(process.argv.slice(2), {
+  alias: {
+      p: 'priceId',
+      t: 'timestamp'
+  }
+});
+
+// console.log('args:', args);
 
 const client = new BigQuery();
 
-let query = `
-DECLARE halfway int64;
-DECLARE block_count int64;
-DECLARE max_block int64;
-
--- Querying for the amount of blocks in the preset time range. This will allow block_count to be compared against a given minimum block amount.
-SET (block_count, max_block) = (SELECT AS STRUCT (MAX(number) - MIN(number)), MAX(number) FROM \`bigquery-public-data.crypto_ethereum.blocks\` WHERE timestamp BETWEEN TIMESTAMP('2020-09-15 22:00:00', 'UTC') AND TIMESTAMP('2020-09-16 22:00:00', 'UTC'));
-
-CREATE TEMP TABLE cum_gas (
-  gas_price int64,
-  cum_sum int64
-);
-
--- If the minimum threshold of blocks is met, query on a time range
-IF block_count >= 7000 THEN
-INSERT INTO cum_gas (
-  SELECT
-    gas_price,
-    SUM(gas_used) OVER (ORDER BY gas_price) AS cum_sum
-  FROM (
-    SELECT
-      gas_price,
-      SUM(receipt_gas_used) AS gas_used
-    FROM
-      \`bigquery-public-data.crypto_ethereum.transactions\`
-    WHERE block_timestamp 
-    BETWEEN TIMESTAMP('2020-09-15 22:00:00', 'UTC')
-    AND TIMESTAMP('2020-09-16 22:00:00', 'UTC')  
-    GROUP BY
-      gas_price));
-ELSE -- If a minimum threshold of blocks is not met, query for the minimum amount of blocks
-INSERT INTO cum_gas (
-  SELECT
-    gas_price,
-    SUM(gas_used) OVER (ORDER BY gas_price) AS cum_sum
-  FROM (
-    SELECT
-      gas_price,
-      SUM(receipt_gas_used) AS gas_used
-    FROM
-      \`bigquery-public-data.crypto_ethereum.transactions\`
-    WHERE block_number 
-    BETWEEN (max_block - 4800)
-    AND max_block
-    GROUP BY
-      gas_price));
-END IF;
-
-SET halfway = (SELECT DIV(MAX(cum_sum),2) FROM cum_gas);
-
-SELECT cum_sum, gas_price FROM cum_gas WHERE cum_sum > halfway ORDER BY gas_price LIMIT 1;
-`
-
-async function runTest(){
+async function runTest(query){
   
   // returns a node read stream
   const stream = await client.createQueryStream({query})
@@ -75,47 +33,110 @@ async function runTest(){
 
 }
 
-function paramaterizeQuery(priceId, timestamp) {
-    let minBlockAmount, timeDifference;
-    const currentTime = new Date();
+function buildQuery(priceId, timestamp) {
+    let query;
+    let timeDifference;
+    let t1;
+    let t2;
+    let minBlockAmount = 0;
+    
+    //If a timestamp is passed in (i.e. voting or a dispute) use that. If not, use the current time.
+    // (timestamp) ? t1 = timestamp : t1 = new Date();
+
+    if(timestamp){
+      // timestamp = new Date().toUTCString();
+      t1 = timestamp;
+    } else {
+      t1 = new Date();
+    }
 
     //timeDifference equals 3600 (seconds in an hour) * the number of hours in the specified price identifier
     switch(priceId){
-        case 'GASETH-1H':
-            timeDifference = 3600;
+        case 'GASETH-1HR':
+            timeDifference = 3600000;
             minBlockAmount = 200;
             break;
         case 'GASETH-4HR':
-            timeDifference = 14400;
+            timeDifference = 14400000;
             minBlockAmount = 800;
             break;
         case 'GASETH-1D':
-            timeDifference = 86400;
+            timeDifference = 86400000;
             minBlockAmount = 4800;
             break;
         case 'GASETH-1W':
-            timeDifference = 604800;
+            timeDifference = 604800000;
             minBlockAmount = 33600;
             break;
         case 'GASETH-1M':
-            timeDifference = 2592000;
+            timeDifference = 2592000000;
             minBlockAmount = 134400;
             break;
         default:
-            timeDifference = 3600;
+            timeDifference = 3600000;
             minBlockAmount = 200;
     }
+    t2 = new Date(t1 - timeDifference);
+    t1 = moment(t1).utc().format('YYYY-MM-DD HH:mm:ss');
+    t2 = moment(t2).utc().format('YYYY-MM-DD HH:mm:ss');
+
+    query = `
+        DECLARE halfway int64;
+        DECLARE block_count int64;
+        DECLARE max_block int64;
+
+        -- Querying for the amount of blocks in the preset time range. This will allow block_count to be compared against a given minimum block amount.
+        SET (block_count, max_block) = (SELECT AS STRUCT (MAX(number) - MIN(number)), MAX(number) FROM \`bigquery-public-data.crypto_ethereum.blocks\` 
+        WHERE timestamp BETWEEN TIMESTAMP('${t2}', 'UTC') AND TIMESTAMP('${t1}', 'UTC'));
+
+        CREATE TEMP TABLE cum_gas (
+          gas_price int64,
+          cum_sum int64
+        );
+
+        -- If the minimum threshold of blocks is met, query on a time range
+        IF block_count >= ${minBlockAmount} THEN
+        INSERT INTO cum_gas (
+          SELECT
+            gas_price,
+            SUM(gas_used) OVER (ORDER BY gas_price) AS cum_sum
+          FROM (
+            SELECT
+              gas_price,
+              SUM(receipt_gas_used) AS gas_used
+            FROM
+              \`bigquery-public-data.crypto_ethereum.transactions\`
+            WHERE block_timestamp 
+            BETWEEN TIMESTAMP('${t2}', 'UTC')
+            AND TIMESTAMP('${t1}', 'UTC')  
+            GROUP BY
+              gas_price));
+        ELSE -- If a minimum threshold of blocks is not met, query for the minimum amount of blocks
+        INSERT INTO cum_gas (
+          SELECT
+            gas_price,
+            SUM(gas_used) OVER (ORDER BY gas_price) AS cum_sum
+          FROM (
+            SELECT
+              gas_price,
+              SUM(receipt_gas_used) AS gas_used
+            FROM
+              \`bigquery-public-data.crypto_ethereum.transactions\`
+            WHERE block_number 
+            BETWEEN (max_block - ${minBlockAmount})
+            AND max_block
+            GROUP BY
+              gas_price));
+        END IF;
+
+        SET halfway = (SELECT DIV(MAX(cum_sum),2) FROM cum_gas);
+
+        SELECT cum_sum, gas_price FROM cum_gas WHERE cum_sum > halfway ORDER BY gas_price LIMIT 1;
+        `
+        return query;
  }
 
-
-export default function calculateMedianGas(){
-    paramaterizeQuery();
-    
-    runTest()
-    .then(median => {
-        return median;
-    })
-    .catch(console.log)
-
-}
-// runTest().then().catch(console.log)
+ runTest(buildQuery(args.p, args.t)).then(res => {
+   console.log(res[0].gas_price)
+ }).catch(console.log);
+ 
