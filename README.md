@@ -20,7 +20,7 @@ node bigquery-connection.js -p 'PRICE_IDENTIFIER' -t 'UNIX_TIMESTAMP'
 This will return the median gas price for the specified price identifier. -t is optional and if not passed will give results based on the *current time* as the end bound.
 
 | Identifier |
-|------------|------------------------------------------------------------------------------------------------------------------------------------------|
+|------------|
 | GASETH-1HR |
 | GASETH-4HR |
 | GASETH-1D | 
