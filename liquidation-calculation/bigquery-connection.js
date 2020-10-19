@@ -1,7 +1,6 @@
 const {BigQuery} = require('@google-cloud/bigquery');
 const highland = require('highland');
 const moment = require('moment');
-
 const minimist = require('minimist');
 
 let args = minimist(process.argv.slice(2), {
@@ -34,21 +33,10 @@ async function runTest(query){
 }
 
 function buildQuery(priceId, timestamp) {
-    let query;
-    let timeDifference;
-    let t1;
-    let t2;
-    let minBlockAmount = 0;
+    let query, timeDifference, t1, t2, minBlockAmount;
     
     //If a timestamp is passed in (i.e. voting or a dispute) use that. If not, use the current time.
-    // (timestamp) ? t1 = timestamp : t1 = new Date();
-
-    if(timestamp){
-      // timestamp = new Date().toUTCString();
-      t1 = timestamp;
-    } else {
-      t1 = new Date();
-    }
+    (timestamp) ? t1 = timestamp : t1 = new Date();
 
     //timeDifference equals 3600 (seconds in an hour) * the number of hours in the specified price identifier
     switch(priceId){
@@ -137,6 +125,8 @@ function buildQuery(priceId, timestamp) {
  }
 
  runTest(buildQuery(args.p, args.t)).then(res => {
+
    console.log(res[0].gas_price)
+
  }).catch(console.log);
  
